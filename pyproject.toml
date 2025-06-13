@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shred_s4_benchmark"
+version = "0.1"
+description = "Experiments comparing SHRED and S4"
+authors = [{name = "Purav Matlia", email = "puravmatlia@gmail.com"}]
+dependencies = []
+
+[tool.setuptools]
+packages = ["shred_s4_benchmark"]
