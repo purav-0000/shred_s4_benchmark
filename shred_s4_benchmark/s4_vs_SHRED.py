@@ -109,7 +109,7 @@ def preprocess_data(data, device, sequence_length, num_sensors):
     sensor_indices = np.random.choice(num_spatial_locations, size=num_sensors, replace=False)
 
     # Generate training indices (sequence start positions)
-    train_size = int(num_time_steps * 0.75)
+    train_size = int((num_time_steps - sequence_length) * 0.75)
     train_indices = np.random.choice(num_time_steps - sequence_length, size=train_size, replace=False)
 
     # Create mask to separate validation and test indices from training
@@ -118,9 +118,12 @@ def preprocess_data(data, device, sequence_length, num_sensors):
     available_indices = np.arange(num_time_steps - sequence_length)[mask]
 
     # Randomly select validation indices and test indices
-    valid_size = int(num_time_steps * 0.1)
+    valid_size = int((num_time_steps - sequence_length) * 0.1)
     valid_indices = np.random.choice(available_indices, size=valid_size, replace=False)
     test_indices = np.setdiff1d(available_indices, valid_indices)
+
+    # State information
+    print(f"Training set size: {len(train_indices)}, validation set size: {len(valid_indices)}, test set size: {len(test_indices)}")
 
     # Fit scaler on training data and transform entire dataset
     scaler = MinMaxScaler()
@@ -202,7 +205,7 @@ def setup_optimizer(model, lr, weight_decay, epochs):
 
 
 # === Fit wrapper function ===
-def train(model, model_name, train_ds, valid_ds):
+def train(model, model_name, train_ds, valid_ds, args):
     """Wrapper for the fit function"""
 
     def get_model_param(args, param):
@@ -216,7 +219,7 @@ def train(model, model_name, train_ds, valid_ds):
     if get_model_param(args, "optimize_lr"):
         optimizer, scheduler = setup_optimizer(
             model=model,
-            lr=get_model_param(args, "general_lr"),
+            lr=get_model_param(args, "lr"),
             weight_decay=get_model_param(args, "weight_decay"),
             epochs=args.epochs
         )
@@ -323,37 +326,40 @@ def main(args):
     ).to(device)
 
     """
+    if args.mamba:
+        mamba = train(mamba, "mamba", train_ds, valid_ds)
+        
     if args.mambadecoder:
         mambawdecoder = train(mambawdecoder, "mambadecoder", train_ds, valid_ds)
 
-    if args.mamba:
-        mamba = train(mamba, "mamba", train_ds, valid_ds)
     """
 
     if args.shred:
-        shred = train(shred, "shred", train_ds, valid_ds)
+        shred = train(shred, "shred", train_ds, valid_ds, args)
 
     if args.s4:
-        s4 = train(s4, "s4", train_ds, valid_ds)
+        s4 = train(s4, "s4", train_ds, valid_ds, args)
 
     if args.s4decoder:
-        s4wdecoder = train(s4wdecoder, "s4decoder", train_ds, valid_ds)
+        s4wdecoder = train(s4wdecoder, "s4decoder", train_ds, valid_ds, args)
 
     # Testing
     print("\nTesting")
     test_ground_truth = scaler.inverse_transform(test_ds.Y.detach().cpu().numpy())
 
-    if args.mamba:
-        test_recons = scaler.inverse_transform(mambawdecoder(test_ds.X).detach().cpu().numpy())
-        print('(Mamba + decoder) Test Reconstruction Error (unscaled data): ')
-        print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
-        print()
-
+    """
     if args.mamba:
         test_recons = scaler.inverse_transform(mamba(test_ds.X).detach().cpu().numpy())
         print('(Mamba) Test Reconstruction Error (unscaled data): ')
         print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
         print()
+        
+    if args.mambadecoder:
+        test_recons = scaler.inverse_transform(mambawdecoder(test_ds.X).detach().cpu().numpy())
+        print('(Mamba + decoder) Test Reconstruction Error (unscaled data): ')
+        print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
+        print()
+    """
 
     if args.shred:
         test_recons = scaler.inverse_transform(shred(test_ds.X).detach().cpu().numpy())
@@ -392,7 +398,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--s4_dropout', type=float, default=0, help='S4 dropout')
     parser.add_argument('--s4_d_model', type=int, default=64, help='S4 model dimension')
-    parser.add_argument('--s4_general_lr', type=float, default=1e-2, help='S4 learning rate for general parameters')
+    parser.add_argument('--s4_lr', type=float, default=1e-3, help='S4 learning rate for general parameters')
     parser.add_argument('--s4_n_layers', type=int, default=2, help='S4 layers')
     parser.add_argument('--s4_optimize_lr', action='store_true', help='turn on learning rate optimization for S4 model')
     parser.add_argument('--s4_prenorm', action='store_true', help='S4 prenorm')
@@ -403,7 +409,7 @@ if __name__ == "__main__":
     parser.add_argument('--s4decoder_decoder_dropout', type=float, default=0.1, help='S4 decoder dropout for decoder layers')
     parser.add_argument('--s4decoder_dropout', type=float, default=0, help='S4 decoder dropout for S4 layers')
     parser.add_argument('--s4decoder_d_model', type=int, default=64, help='S4 decoder model dimension')
-    parser.add_argument('--s4decoder_general_lr', type=float, default=1e-2, help='S4 decoder learning rate for general parameters')
+    parser.add_argument('--s4decoder_lr', type=float, default=1e-3, help='S4 decoder learning rate for general parameters')
     parser.add_argument('--s4decoder_l1', type=int, default=350, help='S4 decoder layer 1 size')
     parser.add_argument('--s4decoder_l2', type=int, default=400, help='S4 decoder layer 2 size')
     parser.add_argument('--s4decoder_n_layers', type=int, default=2, help='S4 decoder layers')
