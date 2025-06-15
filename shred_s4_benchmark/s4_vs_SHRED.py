@@ -375,11 +375,11 @@ def main(args):
         shred_forecaster = SHRED(
             args.num_sensors,
             args.num_sensors,
-            hidden_size=32,
-            hidden_layers=2,
-            l1=100,
-            l2=150,
-            dropout=0.1
+            hidden_size=args.f_shred_hidden_size,
+            hidden_layers=args.f_shred_hidden_layers,
+            l1=args.f_shred_l1,
+            l2=args.f_shred_l2,
+            dropout=args.f_shred_dropout
         ).to(device)
 
         s4_forecaster = S4Model(
@@ -438,20 +438,6 @@ def main(args):
     # Testing
     print("\nTesting")
     test_ground_truth = scaler.inverse_transform(test_ds.Y.detach().cpu().numpy())
-
-    """
-    if args.mamba:
-        test_recons = scaler.inverse_transform(mamba(test_ds.X).detach().cpu().numpy())
-        print('(Mamba) Test Reconstruction Error (unscaled data): ')
-        print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
-        print()
-        
-    if args.mambadecoder:
-        test_recons = scaler.inverse_transform(mambawdecoder(test_ds.X).detach().cpu().numpy())
-        print('(Mamba + decoder) Test Reconstruction Error (unscaled data): ')
-        print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
-        print()
-    """
 
     if args.forecast:
 

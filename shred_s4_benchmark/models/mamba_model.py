@@ -28,7 +28,7 @@ class MambaModel(nn.Module):
         self.norms = nn.ModuleList()
         self.dropouts = nn.ModuleList()
         for _ in range(n_layers):
-            self.mamba_layers.append(Mamba2(
+            self.mamba_layers.append(Mamba(
                 d_model=d_model,
                 d_state=d_state,
                 d_conv=d_conv,
@@ -93,7 +93,7 @@ class MambawDecoder(nn.Module):
         self.norms = nn.ModuleList()
         self.dropouts = nn.ModuleList()
         for _ in range(n_layers):
-            self.mamba_layers.append(Mamba2(
+            self.mamba_layers.append(Mamba(
                 d_model=d_model,
                 d_state=d_state,
                 d_conv=d_conv,
