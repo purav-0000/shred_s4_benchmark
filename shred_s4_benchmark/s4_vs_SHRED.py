@@ -9,7 +9,7 @@ try:
     # SHRED imports
     add_to_python_path("shred_s4_benchmark/external/SHRED")
     from shred_s4_benchmark.external.shred.processdata import load_data, TimeSeriesDataset
-    from shred_s4_benchmark.external.shred.models import SHRED
+    from shred_s4_benchmark.external.shred.models import forecast, SHRED
 except ImportError as e:
     print("Please run setup_external.py with python -m shred_s4_benchmark.setup_external before running any other "
           "Python files")
@@ -150,7 +150,23 @@ def preprocess_data(data, device, sequence_length, num_sensors):
     valid_dataset = TimeSeriesDataset(valid_inputs, valid_outputs)
     test_dataset = TimeSeriesDataset(test_inputs, test_outputs)
 
-    return train_dataset, valid_dataset, test_dataset, scaler
+    sensor_train_data_out, sensor_valid_data_out, sensor_test_data_out = None, None, None
+    sensor_train_dataset, sensor_valid_dataset, sensor_test_dataset = None, None, None
+
+    if args.forecast:
+        # no -1 so output is one $\Delta t$ ahead of the final sensor measurements
+        sensor_train_data_out = torch.tensor(scaled_data[train_indices + sequence_length][:, sensor_indices],
+                                             dtype=torch.float32).to(device)
+        sensor_valid_data_out = torch.tensor(scaled_data[valid_indices + sequence_length][:, sensor_indices],
+                                             dtype=torch.float32).to(device)
+        sensor_test_data_out = torch.tensor(scaled_data[test_indices + sequence_length][:, sensor_indices],
+                                            dtype=torch.float32).to(device)
+
+        sensor_train_dataset = TimeSeriesDataset(train_inputs, sensor_train_data_out)
+        sensor_valid_dataset = TimeSeriesDataset(valid_inputs, sensor_valid_data_out)
+        sensor_test_dataset = TimeSeriesDataset(test_inputs, sensor_test_data_out)
+
+    return train_dataset, valid_dataset, test_dataset, sensor_train_dataset, sensor_valid_dataset, sensor_test_dataset, scaler
 
 
 # === Setup optimizer for S4 model ===
@@ -260,7 +276,7 @@ def main(args):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    train_ds, valid_ds, test_ds, scaler = preprocess_data(data, device, args.sequence_length, args.num_sensors)
+    train_ds, valid_ds, test_ds, sensor_train_ds, sensor_valid_ds, sensor_test_ds, scaler = preprocess_data(data, device, args.sequence_length, args.num_sensors)
     num_spatial_locations = data.shape[1]
 
     # Initialize models
@@ -291,6 +307,7 @@ def main(args):
         prenorm=args.mambadecoder_prenorm
     )
     """
+
     shred = SHRED(
         args.num_sensors,
         num_spatial_locations,
@@ -325,22 +342,97 @@ def main(args):
         l2=args.s4decoder_l2
     ).to(device)
 
+    # Initialize forecast models if forecast is true
+    if args.forecast:
+        """
+        mambaforecaster_forecaster = MambaModel(
+            args.num_sensors,
+            args.num_sensors,
+            d_conv=args.f_mamba_d_conv,
+            d_model=args.f_mamba_d_model,
+            d_state=args.f_mamba_d_state,
+            expand=args.f_mamba_expand,
+            n_layers=args.f_mamba_n_layers,
+            dropout=args.f_mamba_dropout,
+            prenorm=args.f_mamba_prenorm
+        ).to(device)
+
+        mambawdecoder_forecaster = MambawDecoder(
+            args.num_sensors,
+            args.num_sensors,
+            d_conv=args.f_mambadecoder_d_conv,
+            d_model=args.f_mambadecoder_d_model,
+            d_state=args.f_mambadecoder_d_state,
+            expand=args.f_mambadecoder_expand,
+            l1=args.f_mambadecoder_l1,
+            l2=args.f_mambadecoder_l2,
+            n_layers=args.f_mambadecoder_n_layers,
+            dropout=args.f_mambadecoder_dropout,
+            prenorm=args.f_mambadecoder_prenorm
+        )
+        """
+
+        shred_forecaster = SHRED(
+            args.num_sensors,
+            args.num_sensors,
+            hidden_size=32,
+            hidden_layers=2,
+            l1=100,
+            l2=150,
+            dropout=0.1
+        ).to(device)
+
+        s4_forecaster = S4Model(
+            d_input=args.num_sensors,
+            d_output=args.num_sensors,
+            lr=args.f_s4_special_lr,
+            d_model=args.f_s4_d_model,
+            n_layers=args.f_s4_n_layers,
+            dropout=args.f_s4_dropout,
+            prenorm=args.f_s4_prenorm,
+        ).to(device)
+
+        s4wdecoder_forecaster = S4wDecoder(
+            d_input=args.num_sensors,
+            d_output=args.num_sensors,
+            lr=args.f_s4decoder_special_lr,
+            d_model=args.f_s4decoder_d_model,
+            n_layers=args.f_s4decoder_n_layers,
+            dropout=args.f_s4decoder_dropout,
+            prenorm=args.f_s4decoder_prenorm,
+
+            dropout_decoder=args.f_s4decoder_decoder_dropout,
+            l1=args.f_s4decoder_l1,
+            l2=args.f_s4decoder_l2
+        ).to(device)
+
+
     """
     if args.mamba:
-        mamba = train(mamba, "mamba", train_ds, valid_ds)
+        if args.forecast:
+            mamba_forecaster = train(mamba_forecaster, "f_mamba", sensor_train_ds, sensor_valid_ds, args)
+        mamba = train(mamba, "mamba", train_ds, valid_ds, args)
         
     if args.mambadecoder:
-        mambawdecoder = train(mambawdecoder, "mambadecoder", train_ds, valid_ds)
+        if args.forecast:
+            mambadecoder_forecaster = train(mambadecoder_forecaster, "f_mambadecoder", sensor_train_ds, sensor_valid_ds, args)
+        mambawdecoder = train(mambawdecoder, "mambadecoder", train_ds, valid_ds, args   )
 
     """
 
     if args.shred:
+        if args.forecast:
+            shred_forecaster = train(shred_forecaster, "f_shred", sensor_train_ds, sensor_valid_ds, args)
         shred = train(shred, "shred", train_ds, valid_ds, args)
 
     if args.s4:
+        if args.forecast:
+            s4_forecaster = train(s4_forecaster, "f_s4", sensor_train_ds, sensor_valid_ds, args)
         s4 = train(s4, "s4", train_ds, valid_ds, args)
 
     if args.s4decoder:
+        if args.forecast:
+            s4wdecoder_forecaster = train(s4wdecoder_forecaster, "f_s4decoder", sensor_train_ds, sensor_valid_ds, args)
         s4wdecoder = train(s4wdecoder, "s4decoder", train_ds, valid_ds, args)
 
     # Testing
@@ -361,33 +453,132 @@ def main(args):
         print()
     """
 
-    if args.shred:
-        test_recons = scaler.inverse_transform(shred(test_ds.X).detach().cpu().numpy())
-        print('(SHRED) Test Reconstruction Error (unscaled data): ')
-        print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
-        print()
+    if args.forecast:
 
-    if args.s4:
-        test_recons = scaler.inverse_transform(s4(test_ds.X).detach().cpu().numpy())
-        print('(S4) Test Reconstruction Error (unscaled data): ')
-        print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
-        print()
+        # Generate ground truth ds
+        forecast_truths_generated = False
+        forecast_truths = None
+        """
+        if args.mamba:
+            mamba_forecasted_sensors, mamba_forecasted_reconstructions = forecast(mamba_forecaster, mamba sensor_test_ds)
+            mamba_unscaled_forecast = scaler.inverse_transform(mamba_forecasted_reconstructions.reshape(-1, num_spatial_locations))
+            
+            if not forecast_truths_generated:
+                forecast_truths = np.zeros_like(mamba_unscaled_forecast)
+                for i in range(len(mamba_forecasted_reconstructions)):
+                    truth = scaler.inverse_transform(test_ds.Y[i:i + 1].detach().cpu().numpy())
+                    forecast_truths[i] = truth.reshape(mamba_unscaled_forecast.shape[1])
+                    
+            print('(Mamba) Test Forecasting Error (unscaled data): ')
+            print(np.linalg.norm(mamba_unscaled_forecast - forecast_truths) / np.linalg.norm(forecast_truths))
+            print()
 
-    if args.s4decoder:
-        test_recons = scaler.inverse_transform(s4wdecoder(test_ds.X).detach().cpu().numpy())
-        print('(S4+decoder) Test Reconstruction Error (unscaled data): ')
-        print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
-        print()
+        if args.mambadecoder:
+            mambawdecoder_forecasted_sensors, mambawdecoder_forecasted_reconstructions = forecast(mambawdecoder_forecaster, mambawdecoder, sensor_test_ds)
+            mambawdecoder_unscaled_forecast = scaler.inverse_transform(mambawdecoder_forecasted_reconstructions.reshape(-1, num_spatial_locations))
+            
+            if not forecast_truths_generated:
+                forecast_truths = np.zeros_like(mambawdecoder_unscaled_forecast)
+                for i in range(len(mambawdecoder_forecasted_reconstructions)):
+                    truth = scaler.inverse_transform(test_ds.Y[i:i + 1].detach().cpu().numpy())
+                    forecast_truths[i] = truth.reshape(mambawdecoder_unscaled_forecast.shape[1])
+                    
+            print('(Mamba+decoder) Test Forecasting Error (unscaled data): ')
+            print(np.linalg.norm(mambawdecoder_unscaled_forecast - forecast_truths) / np.linalg.norm(forecast_truths))
+            print()
+        """
+
+        if args.shred:
+            shred_forecasted_sensors, shred_forecasted_reconstructions = forecast(shred_forecaster, shred, sensor_test_ds)
+            shred_unscaled_forecast = scaler.inverse_transform(shred_forecasted_reconstructions.reshape(-1, num_spatial_locations))
+
+            if not forecast_truths_generated:
+                forecast_truths = np.zeros_like(shred_unscaled_forecast)
+                for i in range(len(shred_forecasted_reconstructions)):
+                    truth = scaler.inverse_transform(test_ds.Y[i:i + 1].detach().cpu().numpy())
+                    forecast_truths[i] = truth.reshape(shred_unscaled_forecast.shape[1])
+
+            print('(SHRED) Test Forecasting Error (unscaled data): ')
+            print(np.linalg.norm(shred_unscaled_forecast - forecast_truths) / np.linalg.norm(forecast_truths))
+            print()
+
+        if args.s4:
+            s4_forecasted_sensors, s4_forecasted_reconstructions = forecast(s4_forecaster, s4, sensor_test_ds)
+            s4_unscaled_forecast = scaler.inverse_transform(s4_forecasted_reconstructions.reshape(-1, num_spatial_locations))
+
+            if not forecast_truths_generated:
+                forecast_truths = np.zeros_like(s4_unscaled_forecast)
+                for i in range(len(s4_forecasted_reconstructions)):
+                    truth = scaler.inverse_transform(test_ds.Y[i:i + 1].detach().cpu().numpy())
+                    forecast_truths[i] = truth.reshape(s4_unscaled_forecast.shape[1])
+
+            print('(S4) Test Forecasting Error (unscaled data): ')
+            print(np.linalg.norm(s4_unscaled_forecast - forecast_truths) / np.linalg.norm(forecast_truths))
+            print()
+
+        if args.s4decoder:
+            s4wdecoder_forecasted_sensors, s4wdecoder_forecasted_reconstructions = forecast(s4wdecoder_forecaster, s4wdecoder, sensor_test_ds)
+            s4wdecoder_unscaled_forecast = scaler.inverse_transform(s4wdecoder_forecasted_reconstructions.reshape(-1, num_spatial_locations))
+
+            if not forecast_truths_generated:
+                forecast_truths = np.zeros_like(s4wdecoder_unscaled_forecast)
+                for i in range(len(s4wdecoder_forecasted_reconstructions)):
+                    truth = scaler.inverse_transform(test_ds.Y[i:i + 1].detach().cpu().numpy())
+                    forecast_truths[i] = truth.reshape(s4wdecoder_unscaled_forecast.shape[1])
+
+            print('(S4+decoder) Test Forecasting Error (unscaled data): ')
+            print(np.linalg.norm(s4wdecoder_unscaled_forecast - forecast_truths) / np.linalg.norm(forecast_truths))
+            print()
+    else:
+
+        """
+        if args.mamba:
+            test_recons = scaler.inverse_transform(mamba(test_ds.X).detach().cpu().numpy())
+            print('(Mamba) Test Reconstruction Error (unscaled data): ')
+            print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
+            print()
+        
+        if args.mambadecoder:
+            test_recons = scaler.inverse_transform(mambawdecoder(test_ds.X).detach().cpu().numpy())
+            print('(Mamba+decoder) Test Reconstruction Error (unscaled data): ')
+            print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
+            print()
+        """
+
+        if args.shred:
+            test_recons = scaler.inverse_transform(shred(test_ds.X).detach().cpu().numpy())
+            print('(SHRED) Test Reconstruction Error (unscaled data): ')
+            print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
+            print()
+
+        if args.s4:
+            test_recons = scaler.inverse_transform(s4(test_ds.X).detach().cpu().numpy())
+            print('(S4) Test Reconstruction Error (unscaled data): ')
+            print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
+            print()
+
+        if args.s4decoder:
+            test_recons = scaler.inverse_transform(s4wdecoder(test_ds.X).detach().cpu().numpy())
+            print('(S4+decoder) Test Reconstruction Error (unscaled data): ')
+            print(np.linalg.norm(test_recons - test_ground_truth) / np.linalg.norm(test_ground_truth))
+            print()
+
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
+    parser.add_argument("--forecast", action="store_true", help="Test models on forecasting")
+
+    # Model selection
 
     parser.add_argument("--mamba", action="store_true", help="Use the Mamba model")
     parser.add_argument("--mambadecoder", action="store_true", help="Use the Mamba decoder model")
     parser.add_argument("--shred", action="store_true", help="Use the SHRED model")
     parser.add_argument("--s4", action="store_true", help="Use the S4 model")
     parser.add_argument("--s4decoder", action="store_true", help="Use the S4+decoder model")
+
+    # Construction models
 
     parser.add_argument('--shred_dropout', type=float, default=0.1, help='SHRED dropout')
     parser.add_argument('--shred_hidden_layers', type=int, default=2, help='SHRED hidden layers')
@@ -437,8 +628,63 @@ if __name__ == "__main__":
     parser.add_argument('--mambadecoder_lr', type=float, default=1e-3)
     parser.add_argument('--mambadecoder_l1', type=int, default=350, help='Mamba decoder layer 1 size')
     parser.add_argument('--mambadecoder_l2', type=int, default=400, help='Mamba decoder layer 2 size')
-    parser.add_argument('--mambadecoder_n_layers', type=int, default=2, help='S4 decoder layers')
+    parser.add_argument('--mambadecoder_n_layers', type=int, default=2, help='Mamba decoder layers')
     parser.add_argument('--mambadecoder_prenorm', action='store_true', help='Mamba decoder prenorm')
+
+    # Forecasting models
+
+    parser.add_argument('--f_shred_dropout', type=float, default=0.1, help='Forecasting SHRED dropout')
+    parser.add_argument('--f_shred_hidden_layers', type=int, default=2, help='Forecasting SHRED hidden layers')
+    parser.add_argument('--f_shred_hidden_size', type=int, default=32, help='Forecasting SHRED hidden state size')
+    parser.add_argument('--f_shred_lr', type=float, default=1e-3, help='Forecasting SHRED learning rate')
+    parser.add_argument('--f_shred_l1', type=int, default=100, help='Forecasting SHRED decoder layer 1 size')
+    parser.add_argument('--f_shred_l2', type=int, default=150, help='Forecasting SHRED decoder layer 2 size')
+
+    parser.add_argument('--f_s4_dropout', type=float, default=0, help='Forecasting S4 dropout')
+    parser.add_argument('--f_s4_d_model', type=int, default=32, help='Forecasting S4 model dimension')
+    parser.add_argument('--f_s4_lr', type=float, default=1e-3, help='Forecasting S4 learning rate for general parameters')
+    parser.add_argument('--f_s4_n_layers', type=int, default=2, help='Forecasting S4 layers')
+    parser.add_argument('--f_s4_optimize_lr', action='store_true', help='turn on learning rate optimization for Forecasting S4 model')
+    parser.add_argument('--f_s4_prenorm', action='store_true', help='Forecasting S4 prenorm')
+    parser.add_argument('--f_s4_scheduler', action='store_true', help='Use a scheduler for the learning rate')
+    parser.add_argument('--f_s4_special_lr', type=float, default=1e-3, help='Forecasting S4 learning rate for special parameters, e.g., A matrix')
+    parser.add_argument('--f_s4_weight_decay', type=float, default=0, help='Forecasting S4 weight decay for general parameters')
+
+    parser.add_argument('--f_s4decoder_decoder_dropout', type=float, default=0.1, help='Forecasting S4 decoder dropout for decoder layers')
+    parser.add_argument('--f_s4decoder_dropout', type=float, default=0, help='Forecasting S4 decoder dropout for S4 layers')
+    parser.add_argument('--f_s4decoder_d_model', type=int, default=32, help='Forecasting S4 decoder model dimension')
+    parser.add_argument('--f_s4decoder_lr', type=float, default=1e-3, help='Forecasting S4 decoder learning rate for general parameters')
+    parser.add_argument('--f_s4decoder_l1', type=int, default=100, help='Forecasting S4 decoder layer 1 size')
+    parser.add_argument('--f_s4decoder_l2', type=int, default=150, help='Forecasting S4 decoder layer 2 size')
+    parser.add_argument('--f_s4decoder_n_layers', type=int, default=2, help='Forecasting S4 decoder layers')
+    parser.add_argument('--f_s4decoder_optimize_lr', action='store_true', help='turn on learning rate optimization for Forecasting S4 decoder model')
+    parser.add_argument('--f_s4decoder_prenorm', action='store_true', help='Forecasting S4 decoder prenorm')
+    parser.add_argument('--f_s4decoder_scheduler', action='store_true', help='Use a scheduler for the learning rate')
+    parser.add_argument('--f_s4decoder_special_lr', type=float, default=1e-3, help='Forecasting S4 decoder learning rate for special parameters, e.g., A matrix')
+    parser.add_argument('--f_s4decoder_weight_decay', type=float, default=0, help='Forecasting S4 decoder weight decay for general parameters')
+
+    parser.add_argument('--f_mamba_dropout', type=float, default=0)
+    parser.add_argument('--f_mamba_d_conv', type=int, default=2)
+    parser.add_argument('--f_mamba_d_model', type=int, default=32)
+    parser.add_argument('--f_mamba_d_state', type=int, default=64)
+    parser.add_argument('--f_mamba_expand', type=int, default=2)
+    parser.add_argument('--f_mamba_lr', type=float, default=1e-3)
+    parser.add_argument('--f_mamba_n_layers', type=int, default=2, help='Forecasting Mamba layers')
+    parser.add_argument('--f_mamba_prenorm', action='store_true', help='Forecasting Mamba prenorm')
+
+    parser.add_argument('--f_mambadecoder_decoder_dropout', type=float, default=0.1, help='Forecasting Mamba decoder dropout for decoder layers')
+    parser.add_argument('--f_mambadecoder_dropout', type=float, default=0, help='Forecasting Mamba decoder dropout for Mamba layers')
+    parser.add_argument('--f_mambadecoder_d_conv', type=int, default=2)
+    parser.add_argument('--f_mambadecoder_d_model', type=int, default=32)
+    parser.add_argument('--f_mambadecoder_d_state', type=int, default=64)
+    parser.add_argument('--f_mambadecoder_expand', type=int, default=2)
+    parser.add_argument('--f_mambadecoder_lr', type=float, default=1e-3)
+    parser.add_argument('--f_mambadecoder_l1', type=int, default=100, help='Forecasting Mamba decoder layer 1 size')
+    parser.add_argument('--f_mambadecoder_l2', type=int, default=150, help='Forecasting Mamba decoder layer 2 size')
+    parser.add_argument('--f_mambadecoder_n_layers', type=int, default=2, help='Forecasting Mamba decoder layers')
+    parser.add_argument('--f_mambadecoder_prenorm', action='store_true', help='Forecasting Mamba decoder prenorm')
+
+    # Hyperparameters
 
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for SHRED and S4')
     parser.add_argument('--epochs', type=int, default=1000, help='Training epochs')

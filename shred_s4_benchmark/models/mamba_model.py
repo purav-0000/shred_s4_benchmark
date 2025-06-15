@@ -24,7 +24,7 @@ class MambaModel(nn.Module):
         self.encoder = nn.Linear(d_input, d_model)
 
         # Stack S4 layers as residual blocks
-        self.s4_layers = nn.ModuleList()
+        self.mamba_layers = nn.ModuleList()
         self.norms = nn.ModuleList()
         self.dropouts = nn.ModuleList()
         for _ in range(n_layers):
@@ -47,17 +47,17 @@ class MambaModel(nn.Module):
         """
         x = self.encoder(x)  # (B, L, model_dim)
 
-        for mamba, norm, dropout in zip(self.mamba_layers, self.norm_layers, self.dropout_layers):
+        for mamba, norm, dropout in zip(self.mamba_layers, self.norms, self.dropouts):
             residual = x
 
-            if self.use_prenorm:
+            if self.prenorm:
                 x = norm(x)
 
             x = mamba(x)  # Mamba expects (B, L, D)
             x = dropout(x)
             x = x + residual  # Residual connection
 
-            if not self.use_prenorm:
+            if not self.prenorm:
                 x = norm(x)
 
         x = x[:, -1, :]  # Select last output
@@ -89,7 +89,7 @@ class MambawDecoder(nn.Module):
         self.encoder = nn.Linear(d_input, d_model)
 
         # Stack S4 layers as residual blocks
-        self.s4_layers = nn.ModuleList()
+        self.mamba_layers = nn.ModuleList()
         self.norms = nn.ModuleList()
         self.dropouts = nn.ModuleList()
         for _ in range(n_layers):
@@ -115,17 +115,17 @@ class MambawDecoder(nn.Module):
         """
         x = self.encoder(x)  # (B, L, model_dim)
 
-        for mamba, norm, dropout in zip(self.mamba_layers, self.norm_layers, self.dropout_layers):
+        for mamba, norm, dropout in zip(self.mamba_layers, self.norms, self.dropouts):
             residual = x
 
-            if self.use_prenorm:
+            if self.prenorm:
                 x = norm(x)
 
             x = mamba(x)  # Mamba expects (B, L, D)
             x = dropout(x)
             x = x + residual  # Residual connection
 
-            if not self.use_prenorm:
+            if not self.prenorm:
                 x = norm(x)
 
         # Select last output
